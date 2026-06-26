@@ -1,0 +1,14 @@
+[Unit]
+Description=Park browser audio on pause so the idle headphone codec can suspend (stops Chromium keep-alive hiss)
+After=sound.target pipewire-pulse.service pulseaudio.service
+Wants=sound.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/headphone-hiss-park.py
+ExecStop=%h/.local/bin/headphone-hiss-park.py stop
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

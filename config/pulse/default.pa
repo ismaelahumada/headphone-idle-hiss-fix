@@ -1,0 +1,4 @@
+.include /etc/pulse/default.pa
+
+unload-module module-suspend-on-idle
+load-module module-suspend-on-idle timeout=0
