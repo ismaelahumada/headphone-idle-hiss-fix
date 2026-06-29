@@ -163,6 +163,11 @@ flip to `suspended`, and `journalctl --user -u headphone-hiss-park -f` will show
 
 ## Trade-offs & troubleshooting
 
+- **Calls are protected**: while a browser is capturing your microphone (Google
+  Meet, Zoom, Discord, …), parking is suspended so call audio is never silenced.
+  Plain media playback (YouTube) doesn't capture the mic, so it's still parked
+  normally. (If you join a call with no microphone access at all, parking can't
+  detect the call — grant mic access or `systemctl --user stop headphone-hiss-park`.)
 - **Resume clip**: resuming a paused browser may clip the first ~0.1–0.2 s while the
   stream moves back. Lower `POLL_SEC` in `headphone-hiss-park.py` for faster response.
 - **If browser audio ever breaks**: `systemctl --user stop headphone-hiss-park`

@@ -8,10 +8,13 @@ Strategy (plays NO audio — this is not a mask):
     null sink. The real analog sink then goes idle and the codec suspends
     (~2s with power_save=1), so the hiss stops.
   - When the browser is PLAYING, move the stream back to the real output.
+  - While a browser CALL is active (microphone/tab capture in use, e.g. Google
+    Meet/Zoom), never park — otherwise the call audio would be silenced.
 
 Signal: MPRIS PlaybackStatus over D-Bus (busctl/playerctl), the same mechanism
-the mask daemon uses. Only browser streams are ever touched; other apps
-(music players, calls, system sounds) are left alone.
+the mask daemon uses, plus a capture-stream check to detect calls. Only browser
+streams are ever touched; other apps (music players, system sounds) are left
+alone.
 
 Commands:
   headphone-hiss-park.py          Run daemon
@@ -81,11 +84,11 @@ def get_default_sink() -> str | None:
     return name or None
 
 
-def parse_sink_inputs(text: str) -> list[dict[str, str]]:
+def parse_blocks(text: str, header: str) -> list[dict[str, str]]:
     blocks: list[dict[str, str]] = []
     current: dict[str, str] = {}
     for line in text.splitlines():
-        if line.startswith("Sink Input #"):
+        if line.startswith(header):
             if current:
                 blocks.append(current)
             current = {"id": line.split("#", 1)[1].strip()}
@@ -93,6 +96,8 @@ def parse_sink_inputs(text: str) -> list[dict[str, str]]:
             stripped = line.strip()
             if stripped.startswith("Sink:"):
                 current["sink"] = stripped.split(":", 1)[1].strip()
+            elif stripped.startswith("Source:"):
+                current["source"] = stripped.split(":", 1)[1].strip()
             elif stripped.startswith("Corked:"):
                 current["corked"] = stripped.split(":", 1)[1].strip()
             elif " = " in stripped:
@@ -107,7 +112,26 @@ def list_sink_inputs() -> list[dict[str, str]]:
     out = run_safe("pactl", "list", "sink-inputs")
     if not out:
         return []
-    return parse_sink_inputs(out)
+    return parse_blocks(out, "Sink Input #")
+
+
+def list_source_outputs() -> list[dict[str, str]]:
+    out = run_safe("pactl", "list", "source-outputs")
+    if not out:
+        return []
+    return parse_blocks(out, "Source Output #")
+
+
+def browser_recording() -> bool:
+    """True if a browser is actively capturing audio (microphone/tab) — i.e. a
+    call such as Google Meet, Zoom, Discord. Plain media playback (YouTube) never
+    opens a capture stream, so this cleanly distinguishes a call from a paused
+    video. While a call is active we must NOT park the browser's audio, or the
+    call audio would be silenced."""
+    for so in list_source_outputs():
+        if is_browser(so) and so.get("corked") != "yes":
+            return True
+    return False
 
 
 def is_browser(si: dict[str, str]) -> bool:
@@ -243,6 +267,7 @@ def cmd_status() -> int:
     print(f"null sink ({NULL_SINK_NAME}) index: {nidx}")
     print(f"default (real) sink: {real_sink}")
     print(f"browser playing: {browser_playing()}")
+    print(f"browser capturing (call): {browser_recording()}")
     print("browser streams:")
     for si in list_sink_inputs():
         if is_browser(si):
@@ -288,11 +313,18 @@ def cmd_daemon() -> int:
                                 log(f"unpark #{si['id']} -> {real_sink}")
                     last_state = "playing"
                 elif playing is False:
-                    for si in browser:
-                        if si.get("sink") != nidx and si.get("corked") != "yes":
-                            if move_input(si["id"], nidx):
-                                log(f"park   #{si['id']} (paused) -> {NULL_SINK_NAME}")
-                    last_state = "paused"
+                    if browser_recording():
+                        # A browser call (Meet/Zoom/...) is capturing audio.
+                        # Parking would silence the call, so leave streams live.
+                        if last_state != "recording":
+                            log("browser is capturing audio (call) -> not parking")
+                        last_state = "recording"
+                    else:
+                        for si in browser:
+                            if si.get("sink") != nidx and si.get("corked") != "yes":
+                                if move_input(si["id"], nidx):
+                                    log(f"park   #{si['id']} (paused) -> {NULL_SINK_NAME}")
+                        last_state = "paused"
         except Exception as exc:  # keep the daemon alive
             log(f"warn: {exc}")
         time.sleep(POLL_SEC)
